@@ -301,6 +301,8 @@ type PMatches = Map.Map String [PurposeSet]
 
 type Gamma = Map.Map String Type
 
+type PEnv = Map.Map String State
+
 -- Description: List of rho variable in the environment
 -- -- When we are 'checking' ad we encounter rho0,
 -- -- then rho0 must be in the Delta/scope
@@ -366,16 +368,16 @@ intersectionGamma gamma_1' gamma_2' = do
               }
         }
 
-checkConstructorArgs :: ClassTable -> Gamma -> Delta -> [ArgumentDecl] -> [Term] -> Either String ()
-checkConstructorArgs _ _ _ [] [] = Right ()
-checkConstructorArgs ct gamma delta (argDecl : args) (tTerm : ts) = do
-  (Type gt_actual pi_actual, _) <- checkTerm ct gamma delta tTerm
+checkConstructorArgs :: ClassTable -> Gamma -> PEnv -> Delta -> [ArgumentDecl] -> [Term] -> Either String (Gamma, PEnv)
+checkConstructorArgs _ gamma pEnv _ [] [] = Right (gamma, pEnv)
+checkConstructorArgs ct gamma pEnv delta (argDecl : args) (tTerm : ts) = do
+  (Type gt_actual pi_actual, gamma', pEnv') <- checkTerm ct gamma pEnv delta tTerm
   let t_expected = tArgumentDecl argDecl
-
   if isSubType ct gt_actual (gtType t_expected)
     then
       if isSubPurpose pi_actual (piType t_expected)
-        then checkConstructorArgs ct gamma delta args ts
+        then
+          checkConstructorArgs ct gamma' pEnv' delta args ts
         else
           let missing =
                 Set.toList
@@ -396,25 +398,26 @@ checkConstructorArgs ct gamma delta (argDecl : args) (tTerm : ts) = do
           ++ show (gtType t_expected)
           ++ " but got "
           ++ show gt_actual
-checkConstructorArgs _ _ _ _ _ = Left "ERROR: checkConstructorArgs Constructor Argument Count Mismatch"
+checkConstructorArgs _ _ _ _ _ _ = Left "ERROR: checkConstructorArgs Constructor Argument Count Mismatch"
 
-type CheckResult a = Either String (a, Gamma)
+-- type CheckResult a = Either String (a, Gamma)
+type CheckResult a = Either String (a, Gamma, PEnv)
 
 -- Description: Given a term returns its Type given Gamma
-checkTerm :: ClassTable -> Gamma -> Delta -> Term -> CheckResult Type
-checkTerm ct gamma delta TrueTerm =
-  Right (Type BoolGroundType AnyPurpose, gamma)
-checkTerm ct gamma delta FalseTerm =
-  Right (Type BoolGroundType AnyPurpose, gamma)
-checkTerm ct gamma delta (IntegerTerm _) =
-  Right (Type IntGroundType AnyPurpose, gamma)
-checkTerm ct gamma delta (StringTerm _) =
-  Right (Type StringGroundType AnyPurpose, gamma)
-checkTerm ct gamma delta (VarTerm x) =
+checkTerm :: ClassTable -> Gamma -> PEnv -> Delta -> Term -> CheckResult Type
+checkTerm ct gamma pEnv delta TrueTerm =
+  Right (Type BoolGroundType AnyPurpose, gamma, pEnv)
+checkTerm ct gamma pEnv delta FalseTerm =
+  Right (Type BoolGroundType AnyPurpose, gamma, pEnv)
+checkTerm ct gamma pEnv delta (IntegerTerm _) =
+  Right (Type IntGroundType AnyPurpose, gamma, pEnv)
+checkTerm ct gamma pEnv delta (StringTerm _) =
+  Right (Type StringGroundType AnyPurpose, gamma, pEnv)
+checkTerm ct gamma pEnv delta (VarTerm x) =
   case Map.lookup x gamma of
     Nothing -> Left ("ERROR: checkTerm -> VarTerm the variable " ++ x ++ " is out of scope")
-    Just ty -> Right (ty, gamma)
-checkTerm ct gamma delta (NewTerm concretePurposes className argTerms) = do
+    Just ty -> Right (ty, gamma, pEnv)
+checkTerm ct gamma pEnv delta (NewTerm concretePurposes className argTerms) = do
   classInfo <- case Map.lookup className ct of
     Just info -> Right info
     Nothing -> Left $ "ERROR: checkTerm -> NewTerm Unknown class " ++ className
@@ -423,8 +426,8 @@ checkTerm ct gamma delta (NewTerm concretePurposes className argTerms) = do
   if length kArgs /= length argTerms
     then Left $ "ERROR: checkTerm -> NewTerm Constructor mismatch in " ++ className
     else do
-      checkConstructorArgs ct gamma delta kArgs argTerms
-      return (Type (ClassGroundType className) concretePurposes, gamma)
+      (gamma', pEnv') <- checkConstructorArgs ct gamma pEnv delta kArgs argTerms
+      return (Type (ClassGroundType className) concretePurposes, gamma', pEnv')
 -- Inference:
 -- -- Γ ⊢ t : C_t π_t ▷ Γ′           Γ′i ⊢ x_i : G_x,_i  π_x,_i ▷ Γ′′_i
 -- -- Γ′_i = Γ′′_i−1
@@ -434,15 +437,25 @@ checkTerm ct gamma delta (NewTerm concretePurposes className argTerms) = do
 -- -- is-fn(σ)
 -----------------------------------------------------------------------
 -- -- -- Γ ⊢ t.m(x1 . . . xn) : G(πσ) ▷ Γ′′n[xi 7 → Gx,i(π′′x,iσ)]
-checkTerm ct gamma delta (MethodCallTerm s m arg) = do
+checkTerm ct gamma pEnv delta (MethodCallTerm s m arg) = do
   -- Γ ⊢ t : C_t π_t ▷ Γ′
-  (t_t, gamma') <- checkTerm ct gamma delta s
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta s
 
   case gtType t_t of
     ClassGroundType className -> do
       classInfo <- case Map.lookup className ct of
         Just info -> Right info
         Nothing -> Left ("ERROR: checkTerm -> MethodCallTerm " ++ className ++ " given is not found inside the Class Table")
+
+      -- TODO() perform state condition check (Pre-condition)
+      mtdDecl <- case Map.lookup m (methodPresentClassInfo classInfo) of
+        Just mtd -> Right mtd
+        Nothing -> Left ("ERROR: checkTerm -> MethodCallTerm " ++ className ++ " given is not found inside the Class Table")
+
+      case sPurposeState mtdDecl of
+        Nothing -> Right () -- no state transition expected
+        Just (PurposeState ps expected_transition) ->
+          mapM_ (checkStateTransition pEnv' expected_transition) ps -- perform transition
 
       -- CT(C_t, m) = ∀ρ_x,_i. (Gx,iπ′x,i => π′′_x,_i) -> G_π
       flatMethodSignature <- case Map.lookup m (flatMethodTypeClassInfo classInfo) of
@@ -455,7 +468,7 @@ checkTerm ct gamma delta (MethodCallTerm s m arg) = do
         then Left ("ERROR: checkTerm -> MethodCallTerm expected " ++ show (length argFlat) ++ " arguments but got " ++ show (length arg))
         else do
           --  Γ′_1 = Γ′
-          (gamma_n, sigma) <- bigUnionArgs ct gamma' delta Map.empty argFlat arg
+          (gamma_n, pEnv_n, sigma) <- bigUnionArgs ct gamma' pEnv' delta Map.empty argFlat arg
 
           -- TODO() Remove DEBUG
           let gammaDump =
@@ -469,20 +482,27 @@ checkTerm ct gamma delta (MethodCallTerm s m arg) = do
             else do
               -- Γ ⊢ t.m(x1 . . . xn) : G(πσ)
 
+              -- TODO() perform state condition transition (Post-condition)
+              let pEnv_final = case fPurposeState mtdDecl of
+                    Nothing -> pEnv_n
+                    Just (PurposeState ps target_transition) ->
+                      foldl (\acc p -> Map.insert p target_transition acc) pEnv_n ps -- performTransition
+
               -- TODO() Remove DEBUG
               trace gammaDump $ do
                 let retTy = retFlattenMethodType flatMethodSignature
-                return (retTy, gamma_n)
+                -- Return the updated pEnv_n along with the result
+                return (retTy, gamma_n, pEnv_final)
     -- TODO() Uncomment and Remove the DEBUGs above
     -- let retTy = retFlattenMethodType flatMethodSignature
-    -- return (retTy, gamma_n)
+    -- return (retTy, gamma_n, pEnv_n)
     _ -> Left ("ERROR: checkTerm -> MethodCallTerm the t (Term) given is not of type Class")
   where
     -- Description: Recursively processes method arguments to solve for Rho (sigma) and
-    bigUnionArgs ct gamma delta total_pMatches [] [] = Right (gamma, total_pMatches)
-    bigUnionArgs ct gamma delta total_pMatches (argDecl : args) (t : ts) = do
+    bigUnionArgs ct gamma pEnv delta total_pMatches [] [] = Right (gamma, pEnv, total_pMatches)
+    bigUnionArgs ct gamma pEnv delta total_pMatches (argDecl : args) (t : ts) = do
       -- Γ′i ⊢ x_i : G_x,_i π_x,_i ▷ Γ′′_i
-      (t_actual, gamma_double_prime) <- checkTerm ct gamma delta t
+      (t_actual, gamma_double_prime, pEnv_double_prime) <- checkTerm ct gamma pEnv delta t
 
       if gtType t_actual /= gtType (tArgumentDecl argDecl)
         then
@@ -522,7 +542,31 @@ checkTerm ct gamma delta (MethodCallTerm s m arg) = do
                                in Map.insert varName newTy gamma_double_prime
                     _ -> gamma_double_prime
 
-              bigUnionArgs ct next_gamma delta next_total args ts
+              -- Pass the updated pEnv_double_prime to the next argument
+              bigUnionArgs ct next_gamma pEnv_double_prime delta next_total args ts
+
+    checkStateTransition env expected p =
+      case Map.lookup p env of
+        Just actual | actual == expected -> Right ()
+        Just actual ->
+          Left $
+            "ERROR: checkTerm -> MethodCallTerm  -> checkStateTransition -> Final Transition Failed: Purpose "
+              ++ p
+              ++ " ended in "
+              ++ show actual
+              ++ " but expected "
+              ++ show expected
+        Nothing -> do
+          if ActiveState == expected
+            then Right ()
+            else
+              Left $
+                "ERROR: checkTerm -> MethodCallTerm  -> checkStateTransition -> Final Transition Failed: Purpose "
+                  ++ p
+                  ++ " ended in "
+                  ++ (show ActiveState)
+                  ++ " but expected "
+                  ++ show expected
 
     -- -- Description: Matches a Rho to a PurposeSet. Used during Method-Invocation
     -- -- -- pmatch({p1 · · · pk     }, {pm · · ·              pn     }) = ∅
@@ -550,31 +594,38 @@ checkTerm ct gamma delta (MethodCallTerm s m arg) = do
 -- -- CT(Ct, f) = G
 ------------------------
 -- -- Γ ⊢ t.f : Gπt ▷ Γ′
-checkTerm ct gamma delta (FieldAccessTerm s f) = do
-  (t_t, gamma') <- checkTerm ct gamma delta s -- Γ ⊢ t : C_tπ_t ▷ Γ'
-  case gtType t_t of 
-    ClassGroundType className -> 
+checkTerm ct gamma pEnv delta (FieldAccessTerm s f) = do
+  -- Γ ⊢ t : C_tπ_t ▷ Γ', pEnv'
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta s
+  case gtType t_t of
+    ClassGroundType className ->
       case Map.lookup className ct of
-        Just info -> 
+        Just info ->
           case Map.lookup f (fieldTypeClassInfo info) of -- CT(Ct, f) = G
-            Just fieldGroundType -> return (Type fieldGroundType (piType t_t), gamma') -- Γ ⊢ t.f : Gπt ▷ Γ′
-            Nothing -> 
+            Just fieldGroundType ->
+              -- Γ ⊢ t.f : Gπt ▷ Γ′, pEnv'
+              return (Type fieldGroundType (piType t_t), gamma', pEnv')
+            Nothing ->
               Left $ "ERROR: Field '" ++ f ++ "' not found in class '" ++ className ++ "'"
-        Nothing -> 
+        Nothing ->
           Left $ "ERROR: Class '" ++ className ++ "' not found in Class Table"
-    
-    _ -> Left $ "ERROR Type Mismatch: Cannot access field '" ++ f ++ 
-                "' on a non-object type: " ++ show (gtType t_t)
-checkTerm _ gamma _ other =
+    _ ->
+      Left $
+        "ERROR Type Mismatch: Cannot access field '"
+          ++ f
+          ++ "' on a non-object type: "
+          ++ show (gtType t_t)
+checkTerm _ gamma pEnv _ other =
   Left ("ERROR: checkTerm: Term not yet implemented" ++ show other)
 
-type CheckStatementResult = Either String Gamma
+-- type CheckStatementResult = Either String Gamma
+type CheckStatementResult = Either String (Gamma, PEnv)
 
 -- Description: Given a Statement make sure there are no Misuse of Purposes
 -- Mistypes and return the updated Gamma.
-checkStatement :: ClassTable -> Gamma -> Delta -> Statements -> CheckStatementResult
-checkStatement _ gamma _ SkipStatements =
-  Right gamma
+checkStatement :: ClassTable -> Gamma -> PEnv -> Delta -> Statements -> CheckStatementResult
+checkStatement _ gamma pEnv _ SkipStatements =
+  Right (gamma, pEnv)
 -- Description:
 -- Syntax: let x : T ..= t in s
 -- -- x : Name of let variable
@@ -586,19 +637,19 @@ checkStatement _ gamma _ SkipStatements =
 -- -- CT; C; Γ′[x → T_x]; ∆ ⊢ s ▷ Γ′′
 -- -- ----------------------------------------------------------------------------
 -- -- CT; C; Γ; ∆ ⊢ let x : Tx = t in s ▷ (Γ′′ \ x)[x → Γ′(x)]
-checkStatement ct gamma delta (LetStatements x t_x t s) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t -- CT; C; Γ; ∆ ⊢ t : T_t ▷ Γ′
+checkStatement ct gamma pEnv delta (LetStatements x t_x t s) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t -- CT; C; Γ; ∆ ⊢ t : T_t ▷ Γ′, pEnv′
   -- let delta' = (getRho (piType t_t)) : delta -- ∆ ⊢ π_x -- Come back
   if (isSubType ct (gtType t_t) (gtType t_x))
     then
       if (isSubPurpose (piType t_t) (piType t_x))
         then do
           let gamma_with_x = Map.insert x t_x gamma' -- Γ′[x → T_x]
-          gamma_after_s <- checkStatement ct gamma_with_x delta s -- CT; C; Γ′[x → T_x]; ∆ ⊢ s ▷ Γ′′
+          (gamma_after_s, pEnv'') <- checkStatement ct gamma_with_x pEnv' delta s -- CT; C; Γ′[x → T_x]; ∆ ⊢ s ▷ Γ′′, pEnv′′
           let gamma'' = case Map.lookup x gamma' of -- (Γ′′ \ x)[x → Γ′(x)]
                 Just _ -> gamma_after_s
                 Nothing -> Map.delete x gamma_after_s
-          return gamma'' -- CT; C; Γ; ∆ ⊢ let x : Tx = t in s ▷ (Γ′′ \ x)[x → Γ′(x)]
+          return (gamma'', pEnv'') -- CT; C; Γ; ∆ ⊢ let x : Tx = t in s ▷ (Γ′′ \ x)[x → Γ′(x)], pEnv′′
         else
           let expected_pi = piType t_x
               actual_pi = piType t_t
@@ -630,8 +681,8 @@ checkStatement ct gamma delta (LetStatements x t_x t s) = do
 -- -- CT; C; Γ; ∆ ⊢ t : Bool π ▷ Γ′         CT; C; Γ′; ∆ ⊢ s_i ▷ Γ_i′         Γ′′ = Γ′_1 ⊓ Γ′_2
 -- -- -----------------------------------------------------------------------------------------
 -- -- CT; C; Γ; ∆ ⊢ if t then s1 else s2 ▷ Γ′′
-checkStatement ct gamma delta (IfStatements t s0 s1) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t
+checkStatement ct gamma pEnv delta (IfStatements t s0 s1) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t
   if gtType t_t /= BoolGroundType
     then
       Left
@@ -643,19 +694,23 @@ checkStatement ct gamma delta (IfStatements t s0 s1) = do
         )
     else do
       -- TODO(Joan) Modify Delta and pass to successive checkStatements - Joan
-      gamma_1' <- checkStatement ct gamma' delta s0 -- CT; C; Γ′; ∆ ⊢ s_i ▷ Γ_i′
-      gamma_2' <- checkStatement ct gamma' delta s1 -- CT; C; Γ′; ∆ ⊢ s_i ▷ Γ_i′
-      intersectionGamma gamma_1' gamma_2' -- Γ′′ = Γ′_1 ⊓ Γ′_2
-      -- Inference:
-      -- -- CT; C; Γ; ∆ ⊢ t : Bool π ▷ Γ′
-      -- -- CT; C; Γ′; ∆ ⊢ s ▷ Γ′′
-      -- -- Γ′′′ = Γ′ ⊓ Γ′′
-      -- -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
-      -- -- CT; C; Γ′′′; ∆ ⊢ s ▷ Γ′′
-      -----------------------------------------------------
-      -- -- CT; C; Γ; ∆ ⊢ do s while t ▷ Γ′′′
-checkStatement ct gamma delta (WhileStatements t s) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t -- CT; C;    Γ; ∆ ⊢ t : Bool π ▷ Γ′
+      (gamma_1', pEnv_1) <- checkStatement ct gamma' pEnv' delta s0 -- CT; C; Γ′; ∆ ⊢ s_0 ▷ Γ′_1, pEnv_1
+      (gamma_2', pEnv_2) <- checkStatement ct gamma' pEnv' delta s1 -- CT; C; Γ′; ∆ ⊢ s_1 ▷ Γ′_2, pEnv_2
+      -- intersectionGamma gamma_1' gamma_2' -- Γ′′ = Γ′_1 ⊓ Γ′_2
+      gamma_final <- intersectionGamma gamma_1' gamma_2' -- Γ′′ = Γ′_1 ⊓ Γ′_2
+      -- TODO(Joan) perform intersection of pEnv_1 and pEnv_2 - Joan
+      let pEnv_final = Map.intersectionWith max pEnv_1 pEnv_2
+      return (gamma_final, pEnv_final)
+-- Inference:
+-- -- CT; C; Γ; ∆ ⊢ t : Bool π ▷ Γ′
+-- -- CT; C; Γ′; ∆ ⊢ s ▷ Γ′′
+-- -- Γ′′′ = Γ′ ⊓ Γ′′
+-- -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
+-- -- CT; C; Γ′′′; ∆ ⊢ s ▷ Γ′′
+-----------------------------------------------------
+-- -- CT; C; Γ; ∆ ⊢ do s while t ▷ Γ′′′
+checkStatement ct gamma pEnv delta (WhileStatements t s) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t -- CT; C;    Γ; ∆ ⊢ t : Bool π ▷ Γ′
   if gtType t_t /= BoolGroundType --  t : Bool
     then
       Left
@@ -666,9 +721,12 @@ checkStatement ct gamma delta (WhileStatements t s) = do
             ++ show (gtType t_t)
         )
     else do
-      gamma'' <- checkStatement ct gamma' delta s -- CT; C;   Γ′; ∆ ⊢ s ▷ Γ′′
+      (gamma'', pEnv'') <- checkStatement ct gamma' pEnv' delta s -- CT; C;   Γ′; ∆ ⊢ s ▷ Γ′′
       gamma''' <- intersectionGamma gamma' gamma'' -- Γ′′′ = Γ′ ⊓ Γ′′
-      (t_t', gamma'''_again) <- checkTerm ct gamma''' delta t -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
+      -- TODO() Perform intersetion of pEnv' and pEnv'' .... Ignore for now - Joan
+      let pEnv''' = Map.intersectionWith max pEnv' pEnv''
+
+      (t_t', gamma'''_again, pEnv'''_again) <- checkTerm ct gamma''' pEnv''' delta t -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
       if gtType t_t' /= BoolGroundType --  t : Bool
         then
           Left
@@ -679,8 +737,9 @@ checkStatement ct gamma delta (WhileStatements t s) = do
                 ++ show (gtType t_t')
             )
         else do
-          gamma'''' <- checkStatement ct gamma'''_again delta s
-          return gamma'''_again
+          (gamma'''', pEnv'''') <- checkStatement ct gamma'''_again pEnv'''_again delta s
+          return (gamma'''_again, pEnv'''_again)
+
 -- Inference
 -- -- CT; C; Γ; ∆ ⊢ t : Bool π ▷ Γ′
 -- -- CT; C; Γ′; ∆ ⊢ s ▷ Γ′′
@@ -689,8 +748,8 @@ checkStatement ct gamma delta (WhileStatements t s) = do
 -- -- CT; C; Γ′′′; ∆ ⊢ s ▷ Γ′′′
 -----------------------------------------
 -- -- CT; C; Γ; ∆ ⊢ while t do s ▷ Γ′′′
-checkStatement ct gamma delta (DoStatements s t) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t -- CT; C;    Γ; ∆ ⊢ t : Bool π ▷ Γ′
+checkStatement ct gamma pEnv delta (DoStatements s t) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t -- CT; C;    Γ; ∆ ⊢ t : Bool π ▷ Γ′
   if gtType t_t /= BoolGroundType --  t : Bool
     then
       Left
@@ -701,9 +760,11 @@ checkStatement ct gamma delta (DoStatements s t) = do
             ++ show (gtType t_t)
         )
     else do
-      gamma'' <- checkStatement ct gamma' delta s -- CT; C;   Γ′; ∆ ⊢ s ▷ Γ′′
+      (gamma'', pEnv'') <- checkStatement ct gamma' pEnv' delta s -- CT; C;   Γ′; ∆ ⊢ s ▷ Γ′′
       gamma''' <- intersectionGamma gamma' gamma'' -- Γ′′′ = Γ′ ⊓ Γ′′
-      (t_t', gamma'''_again) <- checkTerm ct gamma''' delta t -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
+      let pEnv''' = Map.intersectionWith min pEnv' pEnv''
+
+      (t_t', gamma'''_again, pEnv'''_again) <- checkTerm ct gamma''' pEnv''' delta t -- CT; C; Γ′′′; ∆ ⊢ t : Bool π′ ▷ Γ′′′
       if gtType t_t' /= BoolGroundType --  t : Bool
         then
           Left
@@ -714,57 +775,70 @@ checkStatement ct gamma delta (DoStatements s t) = do
                 ++ show (gtType t_t')
             )
         else do
-          gamma'''' <- checkStatement ct gamma'''_again delta s
-          return gamma'''_again
+          (gamma'''', pEnv'''') <- checkStatement ct gamma'''_again pEnv'''_again delta s
+          return (gamma'''_again, pEnv'''_again)
 -- Inference:
 -- -- CT; C; Γ; ∆ ⊢ s1 ▷ Γ1        CT; C; Γ; ∆ ⊢ s2 ▷ Γ2
 -- -- --------------------------------------------------
 -- -- CT; C; Γ; ∆ ⊢ s1; s2 ▷ Γ2
-checkStatement ct gamma delta (BlockStatements statement) =
-  checkBlock gamma statement
+checkStatement ct gamma pEnv delta (BlockStatements statement) =
+  checkBlock gamma pEnv statement
   where
-    checkBlock currentGamma [] =
-      Right currentGamma
-    checkBlock currentGamma (s : ss) = do
-      nextGamma <- checkStatement ct currentGamma delta s
-      checkBlock nextGamma ss
-checkStatement ct gamma delta (ReturnStatements t) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t
-  return gamma'
+    checkBlock currentGamma currentPEnv [] =
+      Right (currentGamma, currentPEnv)
+    checkBlock currentGamma currentPEnv (s : ss) = do
+      (nextGamma, nextPEnv) <- checkStatement ct currentGamma currentPEnv delta s
+      checkBlock nextGamma nextPEnv ss
+checkStatement ct gamma pEnv delta (ReturnStatements t) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t
+  return (gamma', pEnv')
 -- Inference:
 -- -- Γ(x) = Cπ
 ----------------------------------------
 -- -- Γ ⊢ x.grant(p) ▷ Γ[x → C(π ∪ p)]
-checkStatement ct gamma delta (XGrantStatements x p) = do
+checkStatement ct gamma pEnv delta (XGrantStatements x p) = do
   let ty = Map.lookup x gamma
   case ty of
     Nothing -> Left ("Error: checkStatement -> XGrantStatements variable " ++ x ++ " not found in gamma")
     Just ty' -> do
       let pi' = (piType ty') {purposes = Set.toList (Set.insert p (Set.fromList (purposes (piType ty'))))}
-      return (Map.insert x (ty' {piType = pi'}) gamma)
+      return (Map.insert x (ty' {piType = pi'}) gamma, pEnv)
 -- Inference:
 -- -- Γ(x) = Cπ         WARN : p ∈ π
 ----------------------------------------
 -- -- Γ ⊢ x.revoke(p) ▷ Γ[x → C(π \ p)]
-checkStatement ct gamma delta (XRevokeStatements x p) = do
+checkStatement ct gamma pEnv delta (XRevokeStatements x p) = do
   let ty = Map.lookup x gamma
   case ty of
     Nothing -> Left ("Error: checkStatement -> XRevokeStatements variable " ++ x ++ " was not found in gamma")
     Just ty' -> do
       let pi' = (piType ty') {purposes = List.delete p (purposes (piType ty'))}
-      return (Map.insert x (ty' {piType = pi'}) gamma)
+      return (Map.insert x (ty' {piType = pi'}) gamma, pEnv)
+-- checkStatement ct gamma pEnv delta (XSetStateStatements x s) = do
+--   let ty = Map.lookup x pEnv
+--   case ty of
+--     Nothing -> do
+--         let pEnv' = Map.insert x s pEnv -- if its not found make it ActiveState
+--         return (gamma, pEnv')
+--     Just ty' -> do
+--         let pEnv' = Map.insert x s pEnv -- if found replace with the s given
+--         return (gamma, pEnv')
+checkStatement ct gamma pEnv delta (XSetStateStatements x s) = do
+  let pEnv' = Map.insert x s pEnv -- if found-or-not replace with the s given
+  return (gamma, pEnv')
+
 -- Inference:
 -- -- CT; C; Γ; ∆ ⊢ t : Tt ▷ Γ′          Γ′(x) = T_x           T_x ⊆ T_t
 -----------------------------------------------------------------------
 -- -- CT; C; Γ; ∆ ⊢ x ..= t ▷ Γ′
-checkStatement ct gamma delta (XAssignmentStatements x t) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t
+checkStatement ct gamma pEnv delta (XAssignmentStatements x t) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t
   case Map.lookup x gamma' of
     Just type_x ->
       if isSubType ct (gtType t_t) (gtType type_x)
         then
           if isSubPurpose (piType t_t) (piType type_x)
-            then Right gamma'
+            then Right (gamma', pEnv')
             else
               -- Left $ "Purpose Misuse: Cannot assign to variable " ++ x
               let expected_pi = piType type_x
@@ -802,13 +876,13 @@ checkStatement ct gamma delta (XAssignmentStatements x t) = do
 -- -- π ⊑ π'
 ----------------------------
 -- -- Γ ⊢ t1.f := t_2 ▷ Γ′
-checkStatement ct gamma delta (TAssignmentStatements target expr) = do
-  (t_t, gamma') <- checkTerm ct gamma delta target -- Γ ⊢ t1 : Cπ ▷ Γ'
-  (t_t2, gamma'') <- checkTerm ct gamma' delta expr -- Γ′ ⊢ t2 : Gπ′ ▷ Γ′′
+checkStatement ct gamma pEnv delta (TAssignmentStatements target expr) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta target -- Γ ⊢ t1 : Cπ ▷ Γ'
+  (t_t2, gamma'', pEnv'') <- checkTerm ct gamma' pEnv' delta expr -- Γ′ ⊢ t2 : Gπ′ ▷ Γ′′
   if isSubType ct (gtType t_t2) (gtType t_t)
     then
       if isSubPurpose (piType t_t2) (piType t_t) -- π ⊑ π'
-        then Right gamma''
+        then Right (gamma'', pEnv'')
         else
           let expected_pi = piType t_t
               actual_pi = piType t_t2
@@ -843,10 +917,10 @@ checkStatement ct gamma delta (TAssignmentStatements target expr) = do
 ----------------------------------------------------------------
 -- -- -- Γ ⊢ t.m(x1 . . . xn) : G(πσ) ▷ Γ′′n[xi 7 → Gx,i(π′′x,iσ)]
 -- Syntax: t.m(x)
-checkStatement ct gamma delta (MethodCallStatements t) = do
-  (t_t, gamma') <- checkTerm ct gamma delta t
-  return gamma'
-checkStatement ct gamma delta something = Left ("Error: CheckStatement not yet implemented" ++ (show something))
+checkStatement ct gamma pEnv delta (MethodCallStatements t) = do
+  (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t
+  return (gamma', pEnv')
+checkStatement ct gamma pEnv delta something = Left ("Error: CheckStatement not yet implemented" ++ (show something))
 
 type CheckMethodDeclResult = Either String ()
 
@@ -870,10 +944,48 @@ checkMethodDecl ct className method = do
   let thisType = Type (ClassGroundType className) AnyPurpose
   let initialGamma = Map.unions [argGamma, fieldGamma, Map.singleton "this" thisType]
 
-  finalGamma <- checkStatement ct initialGamma delta (sMethodDecl method)
-  checkReturn ct initialGamma delta (tMethodDecl method) (sMethodDecl method)
+  -- TODO()check starting and ending state, and add them as active initially
+  let startPurposes = maybe [] psPurposes (sPurposeState method)
+  let endPurposes = maybe [] psPurposes (fPurposeState method)
+  let allMethodPs = List.nub (startPurposes ++ endPurposes)
+  let initialPEnv =
+        foldl (\acc p -> Map.insert p ActiveState acc) Map.empty allMethodPs
+          `Map.union` ( case sPurposeState method of
+                          Nothing -> Map.empty
+                          Just (PurposeState ps st) -> Map.fromList [(p, st) | p <- ps]
+                      )
+  (finalGamma, finalPEnv) <- checkStatement ct initialGamma initialPEnv delta (sMethodDecl method)
+
+  case fPurposeState method of
+    Nothing -> Right () -- no state transition expected
+    Just (PurposeState ps expected_transition) ->
+      mapM_ (checkStateTransition finalPEnv expected_transition) ps
+
+  checkReturn ct initialGamma initialPEnv delta (tMethodDecl method) (sMethodDecl method)
   checkTransitions (ptxpiMethodDecl method) finalGamma
   where
+    checkStateTransition env expected p =
+      case Map.lookup p env of
+        Just actual | actual == expected -> Right ()
+        Just actual ->
+          Left $
+            "ERROR: checkTerm -> MethodCallTerm  -> checkStateTransition -> Final Transition Failed: Purpose "
+              ++ p
+              ++ " ended in "
+              ++ show actual
+              ++ " but expected "
+              ++ show expected
+        Nothing -> do
+          if ActiveState == expected
+            then Right ()
+            else
+              Left $
+                "ERROR: checkTerm -> MethodCallTerm  -> checkStateTransition -> Final Transition Failed: Purpose "
+                  ++ p
+                  ++ " ended in "
+                  ++ (show ActiveState)
+                  ++ " but expected "
+                  ++ show expected
     checkTransitions [] _ = Right ()
     checkTransitions (arg : args) fGamma = do
       let x = nArgumentDecl arg
@@ -885,18 +997,18 @@ checkMethodDecl ct className method = do
         Nothing -> Left ("ERROR: checkTransitions -> checkMethodDecl -> The variable " ++ x ++ " was not found in the local gamma")
 
     -- TODO come back to this, peform reacheability in terms of structure
-    checkReturn ct g d expected (BlockStatements stmts) = checkBlock g stmts
+    checkReturn ct g p d expected (BlockStatements stmts) = checkBlock g p stmts
       where
-        checkBlock _ [] = Right ()
-        checkBlock currentG (s : ss) = do
+        checkBlock _ _ [] = Right ()
+        checkBlock currentG currentP (s : ss) = do
           case s of
             ReturnStatements expr -> do
-              (Type gt_actual pi_actual, _) <- checkTerm ct currentG d expr
+              (Type gt_actual pi_actual, _, _) <- checkTerm ct currentG currentP d expr
               if isSubType ct gt_actual (gtType expected) && isSubPurpose pi_actual (piType expected)
                 then Right ()
                 else Left "Type Mismatch in Return"
-            _ -> case checkStatement ct currentG d s of
-              Right nextG -> checkBlock nextG ss
+            _ -> case checkStatement ct currentG currentP d s of
+              Right (nextG, nextP) -> checkBlock nextG nextP ss
               Left err -> Left err
 
     collectRhos m = List.nub $ concatMap (\a -> [getRho (piType (tArgumentDecl a)), getRho (piArgumentDecl a)]) (ptxpiMethodDecl m)
@@ -914,8 +1026,9 @@ checkConstructorDecl ct className kDecl = do
   let argGamma = Map.fromList [(nArgumentDecl arg, tArgumentDecl arg) | arg <- ptxpiConstructorDecl kDecl]
   let thisType = Type (ClassGroundType className) AnyPurpose
   let initialGamma = Map.unions [argGamma, fieldGamma, Map.singleton "this" thisType]
+  let initialPEnv = Map.empty
 
-  finalGamma <- checkStatement ct initialGamma delta (sConstructorDecl kDecl)
+  (finalGamma, finalPEnv) <- checkStatement ct initialGamma initialPEnv delta (sConstructorDecl kDecl)
 
   checkTransitions (ptxpiConstructorDecl kDecl) finalGamma
   where
@@ -1027,7 +1140,7 @@ main = do
   case parse parseTerm "" inpTrue of
     Left err -> putStrLn $ "Parse Error: " ++ show err
     Right ast -> do
-      let inpTrue' = checkTerm initialClassTable Map.empty [] ast
+      let inpTrue' = checkTerm initialClassTable Map.empty Map.empty [] ast
       print inpTrue'
 
   putStrLn "----------------------------------------------------------"
@@ -1038,9 +1151,9 @@ main = do
     Left err -> putStrLn $ "Parse Error: " ++ show err
     Right ast -> do
       print ast
-      let inputLetX' = checkStatement initialClassTable Map.empty [] ast
+      let inputLetX' = checkStatement initialClassTable Map.empty Map.empty [] ast
       case inputLetX' of
-        Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+        Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
         Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1051,9 +1164,9 @@ main = do
     Left err -> putStrLn $ "Parse Error: " ++ show err
     Right ast -> do
       print ast
-      let inputLetXYValid' = checkStatement initialClassTable Map.empty [] ast
+      let inputLetXYValid' = checkStatement initialClassTable Map.empty Map.empty [] ast
       case inputLetXYValid' of
-        Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+        Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
         Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1064,9 +1177,9 @@ main = do
     Left err -> putStrLn $ "Parse Error: " ++ show err
     Right ast -> do
       print ast
-      let inputLetXYInValid' = checkStatement initialClassTable Map.empty [] ast
+      let inputLetXYInValid' = checkStatement initialClassTable Map.empty Map.empty [] ast
       case inputLetXYInValid' of
-        Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+        Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
         Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1081,9 +1194,9 @@ main = do
         Left err -> putStrLn $ "Parse Error: " ++ show err
         Right ast -> do
           print ast
-          let inputIfTwoSkip' = checkStatement initialClassTable Map.empty [] ast
+          let inputIfTwoSkip' = checkStatement table Map.empty Map.empty [] ast
           case inputIfTwoSkip' of
-            Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+            Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
             Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1098,9 +1211,9 @@ main = do
         Left err -> putStrLn $ "Parse Error: " ++ show err
         Right ast -> do
           print ast
-          let inputIfTwoSkip' = checkStatement initialClassTable Map.empty [] ast
+          let inputIfTwoSkip' = checkStatement table Map.empty Map.empty [] ast
           case inputIfTwoSkip' of
-            Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+            Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
             Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1115,9 +1228,9 @@ main = do
         Left err -> putStrLn $ "Parse Error: " ++ show err
         Right ast -> do
           print ast
-          let inputIfTwoSkip' = checkStatement initialClassTable Map.empty [] ast
+          let inputIfTwoSkip' = checkStatement table Map.empty Map.empty [] ast
           case inputIfTwoSkip' of
-            Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+            Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
             Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1132,9 +1245,9 @@ main = do
         Left err -> putStrLn $ "Parse Error: " ++ show err
         Right ast -> do
           print ast
-          let inputIfTwoSkip' = checkStatement initialClassTable Map.empty [] ast
+          let inputIfTwoSkip' = checkStatement table Map.empty Map.empty [] ast
           case inputIfTwoSkip' of
-            Right finalGamma -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
+            Right (finalGamma, finalPEnv) -> putStrLn $ "Success! Final Gamma (should be empty): " ++ show finalGamma
             Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"
@@ -1143,7 +1256,7 @@ main = do
     Left err -> putStrLn $ "Parser Error: " ++ show err
     Right ast -> do
       let table = classTableConstructor ast
-      let methodCallIdentity = "let x : int {|p0, p1|xrho|} := true in { my_obj.identityTestNewBool(x); }"
+      let methodCallIdentity = "let x : bool {|p0|} := true in { my_obj.identityTestNewBool(x); }"
       putStrLn $ "Testing: " ++ methodCallIdentity
 
       case parse parseStatements "" methodCallIdentity of
@@ -1153,10 +1266,10 @@ main = do
           let my_obj_type = Type (ClassGroundType "TestNew") (PurposeSet [] Nothing)
           let my_obj_gamma = Map.fromList [("my_obj", my_obj_type)]
 
-          let methodCallIdentity' = checkStatement table my_obj_gamma [] (head astStatements)
+          let methodCallIdentity' = checkStatement table my_obj_gamma Map.empty [] (head astStatements)
 
           case methodCallIdentity' of
-            Right finalGamma -> putStrLn $ "Success!"
+            Right (finalGamma, finalPEnv) -> putStrLn $ "Success!"
             Left err -> putStrLn $ "Type/Security Error: " ++ err
 
   putStrLn "----------------------------------------------------------"

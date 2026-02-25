@@ -265,7 +265,9 @@ main = hspec $ do
                         sMethodDecl =
                           BlockStatements
                             { bStatements = [ReturnStatements {tStatements = VarTerm "a"}]
-                            }
+                            },
+                        sPurposeState = Nothing,
+                        fPurposeState = Nothing
                       }
                   ]
               }

@@ -12,6 +12,21 @@ data GroundType
   | UnitGroundType -- When no types is given aiding in giving function type signature
   deriving (Show, Eq)
 
+-- k := active, notYetActive | suspended | terminated
+data State
+  = ActiveState
+  | NotYetActiveState
+  | SuspendedState
+  | TerminatedState
+  deriving (Show, Eq, Ord)
+
+-- πk := π:k
+data PurposeState = PurposeState
+  { psPurposes :: [String],
+    psState :: State
+  }
+  deriving (Show, Eq, Ord)
+
 -- π ::= {p1, p2, ..., pn} | {| p1, ..., pn | ρ |}
 data PurposeSet
   = PurposeSet {purposes :: [String], rho :: Maybe String}
@@ -52,6 +67,7 @@ data Value
 -- -- | do s while t | while t do s
 -- -- | x.grant(p)
 -- -- | x.revoke(p)
+-- -- | x.setState(k)
 data Statements
   = XAssignmentStatements {xStatements :: String, tStatements :: Term}
   | TAssignmentStatements {t_fStatements :: Term, tStatements :: Term}
@@ -64,6 +80,7 @@ data Statements
   | MethodCallStatements {tMethodCall :: Term} -- invocation
   | XGrantStatements {xStatements :: String, pStatements :: String}
   | XRevokeStatements {xStatements :: String, pStatements :: String}
+  | XSetStateStatements {xSetState :: String, stSetState :: State}
   | ReturnStatements {tStatements :: Term}
   deriving (Show, Eq)
 
@@ -112,7 +129,9 @@ data MethodDecl = MethodDecl
   { tMethodDecl :: Type,
     mMethodDecl :: String,
     ptxpiMethodDecl :: [ArgumentDecl],
-    sMethodDecl :: Statements
+    sMethodDecl :: Statements,
+    sPurposeState :: (Maybe PurposeState), -- starting state
+    fPurposeState :: (Maybe PurposeState) -- final state
   }
   deriving (Show, Eq)
 

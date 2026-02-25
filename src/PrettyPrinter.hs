@@ -70,6 +70,7 @@ prettyPrinterStatements (IfStatements t s0 s1) = "if ( " ++ (prettyPrinterTerm t
 prettyPrinterStatements (DoStatements s t) = "do\n" ++ (prettyPrinterStatements s) ++ "\nwhile ( " ++ (prettyPrinterTerm t) ++ " )"
 prettyPrinterStatements (WhileStatements t s) = "while ( " ++ (prettyPrinterTerm t) ++ " )\ndo\n" ++ (prettyPrinterStatements s)
 prettyPrinterStatements (XGrantStatements x p) = x ++ ".grant(" ++ p ++ ")"
+prettyPrinterStatements (XSetStateStatements x s) = x ++ ".setState(" ++ show s ++ ")"
 prettyPrinterStatements (XRevokeStatements x p) = x ++ ".revoke(" ++ p ++ ")"
 prettyPrinterStatements (ReturnStatements t) = "return " ++ prettyPrinterTerm t
 prettyPrinterStatements (MethodCallStatements t) = prettyPrinterTerm t
@@ -92,8 +93,28 @@ prettyPrinterFunctionDeclSet :: [FunctionDecl] -> String
 prettyPrinterFunctionDeclSet [] = ""
 prettyPrinterFunctionDeclSet (m : ms) = (prettyPrinterFunctionDecl m) ++ "\n" ++ (prettyPrinterFunctionDeclSet ms)
 
+prettyPrinterPurposeState :: PurposeState -> String
+prettyPrinterPurposeState (PurposeState (p : _) s) =
+  "[" ++ p ++ ":" ++ prettyPrinterState s ++ "] "
+  where
+    prettyPrinterState ActiveState = "active"
+    prettyPrinterState NotYetActiveState = "notYetActive"
+    prettyPrinterState SuspendedState = "suspended"
+    prettyPrinterState TerminatedState = "terminated"
+
+-- prettyPrinterPurposeState (PurposeState [] _) = ""
+
 prettyPrinterMethodDecl :: MethodDecl -> String
-prettyPrinterMethodDecl (MethodDecl t m ptxpi s) = "function " ++ m ++ " " ++ (prettyPrinterArgumentDeclSet ptxpi) ++ " -> " ++ (prettyPrinterType t) ++ (prettyPrinterStatements s)
+prettyPrinterMethodDecl (MethodDecl t m ptxpi s start end) =
+  "function "
+    ++ maybe "" prettyPrinterPurposeState start
+    ++ m
+    ++ " "
+    ++ maybe "" prettyPrinterPurposeState end
+    ++ prettyPrinterArgumentDeclSet ptxpi
+    ++ " -> "
+    ++ prettyPrinterType t
+    ++ prettyPrinterStatements s
 
 prettyPrinterMethodDeclSet :: [MethodDecl] -> String
 prettyPrinterMethodDeclSet [] = ""
@@ -142,264 +163,275 @@ prettyPrinterProgram (Program classes) = prettyPrinterProgram' classes
 
 main :: IO ()
 main = do
-  let inpPurposeSet = "{| p0, p2 | RHOOOO |}"
-  let inpPurposeSet' = parse parsePurposeSet "" inpPurposeSet
-  case inpPurposeSet' of
+  let inpMethodDeclWithState = "function [R1:active] getObjectID [R1:terminated] () -> int {||} {return ObjectID}"
+  let inpMethodDeclWithState' = parse parseMethodDecl "" inpMethodDeclWithState
+  case inpMethodDeclWithState' of
     Left err -> print err
     Right ast -> do
       print ast
-      let prettyPurposeSet = prettyPrinterPurposeSet ast
-      putStrLn prettyPurposeSet
+      let prettyMethodDeclWithState = prettyPrinterMethodDecl ast
+      putStrLn ""
+      putStrLn prettyMethodDeclWithState
   putStrLn ""
 
-  let inpTrueTerm = "true"
-  let inpTrueTerm' = parse parseBoolTerm "" inpTrueTerm
-  case inpTrueTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermTrue = prettyPrinterTerm ast
-      putStrLn prettyTermTrue
-  putStrLn ""
+  -- let inpPurposeSet = "{| p0, p2 | RHOOOO |}"
+  -- let inpPurposeSet' = parse parsePurposeSet "" inpPurposeSet
+  -- case inpPurposeSet' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyPurposeSet = prettyPrinterPurposeSet ast
+  --     putStrLn prettyPurposeSet
+  -- putStrLn ""
 
-  let inpFalseTerm = "false"
-  let inpFalseTerm' = parse parseBoolTerm "" inpFalseTerm
-  case inpFalseTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermFalse = prettyPrinterTerm ast
-      putStrLn prettyTermFalse
-  putStrLn ""
+  -- let inpTrueTerm = "true"
+  -- let inpTrueTerm' = parse parseBoolTerm "" inpTrueTerm
+  -- case inpTrueTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermTrue = prettyPrinterTerm ast
+  --     putStrLn prettyTermTrue
+  -- putStrLn ""
 
-  let inpVarTerm = "my_variable"
-  let inpVarTerm' = parse parseVarTerm "" inpVarTerm
-  case inpVarTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermVar = prettyPrinterTerm ast
-      putStrLn prettyTermVar
-  putStrLn ""
+  -- let inpFalseTerm = "false"
+  -- let inpFalseTerm' = parse parseBoolTerm "" inpFalseTerm
+  -- case inpFalseTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermFalse = prettyPrinterTerm ast
+  --     putStrLn prettyTermFalse
+  -- putStrLn ""
 
-  let inpIntTerm = "456456"
-  let inpIntTerm' = parse parseIntegerTerm "" inpIntTerm
-  case inpIntTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermInt = prettyPrinterTerm ast
-      putStrLn prettyTermInt
-  putStrLn ""
+  -- let inpVarTerm = "my_variable"
+  -- let inpVarTerm' = parse parseVarTerm "" inpVarTerm
+  -- case inpVarTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermVar = prettyPrinterTerm ast
+  --     putStrLn prettyTermVar
+  -- putStrLn ""
 
-  let inpMethodTerm = "foobar(a, b, c)"
-  let inpMethodTerm' = parse parseTerm "" inpMethodTerm
-  case inpMethodTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermMethod = prettyPrinterTerm ast
-      putStrLn prettyTermMethod
-  putStrLn ""
+  -- let inpIntTerm = "456456"
+  -- let inpIntTerm' = parse parseIntegerTerm "" inpIntTerm
+  -- case inpIntTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermInt = prettyPrinterTerm ast
+  --     putStrLn prettyTermInt
+  -- putStrLn ""
 
-  let inpNewTerm = "new {| p0, p1 |} My_Class(abc, def)"
-  let inpNewTerm' = parse parseNewTerm "" inpNewTerm
-  case inpNewTerm' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyTermNew = prettyPrinterTerm ast
-      putStrLn prettyTermNew
-  putStrLn ""
+  -- let inpMethodTerm = "foobar(a, b, c)"
+  -- let inpMethodTerm' = parse parseTerm "" inpMethodTerm
+  -- case inpMethodTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermMethod = prettyPrinterTerm ast
+  --     putStrLn prettyTermMethod
+  -- putStrLn ""
 
-  let inpTrueValue = "true"
-  let inpTrueValue' = parse parseBoolValue "" inpTrueValue
-  case inpTrueValue' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyValueTrue = prettyPrinterValue ast
-      putStrLn prettyValueTrue
-  putStrLn ""
+  -- let inpNewTerm = "new {| p0, p1 |} My_Class(abc, def)"
+  -- let inpNewTerm' = parse parseNewTerm "" inpNewTerm
+  -- case inpNewTerm' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyTermNew = prettyPrinterTerm ast
+  --     putStrLn prettyTermNew
+  -- putStrLn ""
 
-  let inpFalseValue = "false"
-  let inpFalseValue' = parse parseBoolValue "" inpFalseValue
-  case inpFalseValue' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyValueFalse = prettyPrinterValue ast
-      putStrLn prettyValueFalse
-  putStrLn ""
+  -- let inpTrueValue = "true"
+  -- let inpTrueValue' = parse parseBoolValue "" inpTrueValue
+  -- case inpTrueValue' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyValueTrue = prettyPrinterValue ast
+  --     putStrLn prettyValueTrue
+  -- putStrLn ""
 
-  let inpIntValue = "456456"
-  let inpIntValue' = parse parseIntegerValue "" inpIntValue
-  case inpIntValue' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyValueInt = prettyPrinterValue ast
-      putStrLn prettyValueInt
-  putStrLn ""
+  -- let inpFalseValue = "false"
+  -- let inpFalseValue' = parse parseBoolValue "" inpFalseValue
+  -- case inpFalseValue' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyValueFalse = prettyPrinterValue ast
+  --     putStrLn prettyValueFalse
+  -- putStrLn ""
 
-  let inpXAssignmentStatement = "foo := true"
-  let inpXAssignmentStatement' = parse parseXAssignmentStatements "" inpXAssignmentStatement
-  case inpXAssignmentStatement' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementXAssignment = prettyPrinterStatements ast
-      putStrLn prettyStatementXAssignment
-  putStrLn ""
+  -- let inpIntValue = "456456"
+  -- let inpIntValue' = parse parseIntegerValue "" inpIntValue
+  -- case inpIntValue' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyValueInt = prettyPrinterValue ast
+  --     putStrLn prettyValueInt
+  -- putStrLn ""
 
-  let inpTAssignmentStatements = "t.f.ff := true"
-  let inpTAssignmentStatements' = parse parseTAssignmentStatements "" inpTAssignmentStatements
-  case inpTAssignmentStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementTAssignment = prettyPrinterStatements ast
-      putStrLn prettyStatementTAssignment
-  putStrLn ""
+  -- let inpXAssignmentStatement = "foo := true"
+  -- let inpXAssignmentStatement' = parse parseXAssignmentStatements "" inpXAssignmentStatement
+  -- case inpXAssignmentStatement' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementXAssignment = prettyPrinterStatements ast
+  --     putStrLn prettyStatementXAssignment
+  -- putStrLn ""
 
-  let inpBlockStatements = "{ x := 123; asd.f.hfg.asd := false; }"
-  let inpBlockStatements' = parse parseBlockStatement "" inpBlockStatements
-  case inpBlockStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementBlock = prettyPrinterStatements ast
-      putStrLn prettyStatementBlock
-  putStrLn ""
+  -- let inpTAssignmentStatements = "t.f.ff := true"
+  -- let inpTAssignmentStatements' = parse parseTAssignmentStatements "" inpTAssignmentStatements
+  -- case inpTAssignmentStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementTAssignment = prettyPrinterStatements ast
+  --     putStrLn prettyStatementTAssignment
+  -- putStrLn ""
 
-  let inpLetStatements = "let x : bool {| Private |} := true in { x := false }"
-  let inpLetStatements' = parse parseLetStatements "" inpLetStatements
-  case inpLetStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementLet = prettyPrinterStatements ast
-      putStrLn prettyStatementLet
-  putStrLn ""
+  -- let inpBlockStatements = "{ x := 123; asd.f.hfg.asd := false; }"
+  -- let inpBlockStatements' = parse parseBlockStatement "" inpBlockStatements
+  -- case inpBlockStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementBlock = prettyPrinterStatements ast
+  --     putStrLn prettyStatementBlock
+  -- putStrLn ""
 
-  let inpIfStatements = "if true then { x:= 123; } else { x:= 321; }"
-  let inpIfStatements' = parse parseIfStatements "" inpIfStatements
-  case inpIfStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementIf = prettyPrinterStatements ast
-      putStrLn prettyStatementIf
-  putStrLn ""
+  -- let inpLetStatements = "let x : bool {| Private |} := true in { x := false }"
+  -- let inpLetStatements' = parse parseLetStatements "" inpLetStatements
+  -- case inpLetStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementLet = prettyPrinterStatements ast
+  --     putStrLn prettyStatementLet
+  -- putStrLn ""
 
-  let inpDoWhileStatements = "do { x:= 123; } while ( true )"
-  let inpDoWhileStatements' = parse parseDoWhileStatements "" inpDoWhileStatements
-  case inpDoWhileStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementDoWhile = prettyPrinterStatements ast
-      putStrLn prettyStatementDoWhile
-  putStrLn ""
+  -- let inpIfStatements = "if true then { x:= 123; } else { x:= 321; }"
+  -- let inpIfStatements' = parse parseIfStatements "" inpIfStatements
+  -- case inpIfStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementIf = prettyPrinterStatements ast
+  --     putStrLn prettyStatementIf
+  -- putStrLn ""
 
-  let inpWhileStatements = "while ( true ) do { x:= 123; }"
-  let inpWhileStatements' = parse parseWhileStatements "" inpWhileStatements
-  case inpWhileStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementWhile = prettyPrinterStatements ast
-      putStrLn prettyStatementWhile
-  putStrLn ""
+  -- let inpDoWhileStatements = "do { x:= 123; } while ( true )"
+  -- let inpDoWhileStatements' = parse parseDoWhileStatements "" inpDoWhileStatements
+  -- case inpDoWhileStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementDoWhile = prettyPrinterStatements ast
+  --     putStrLn prettyStatementDoWhile
+  -- putStrLn ""
 
-  let inpXGrantStatements = "foo.grant(abc)"
-  let inpXGrantStatements' = parse parseXGrantStatement "" inpXGrantStatements
-  case inpXGrantStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementXGrant = prettyPrinterStatements ast
-      putStrLn prettyStatementXGrant
-  putStrLn ""
+  -- let inpWhileStatements = "while ( true ) do { x:= 123; }"
+  -- let inpWhileStatements' = parse parseWhileStatements "" inpWhileStatements
+  -- case inpWhileStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementWhile = prettyPrinterStatements ast
+  --     putStrLn prettyStatementWhile
+  -- putStrLn ""
 
-  let inpXRevokeStatements = "foo.revoke(abc)"
-  let inpXRevokeStatements' = parse parseXRevokeStatement "" inpXRevokeStatements
-  case inpXRevokeStatements' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyStatementXRevoke = prettyPrinterStatements ast
-      putStrLn prettyStatementXRevoke
-  putStrLn ""
+  -- let inpXGrantStatements = "foo.grant(abc)"
+  -- let inpXGrantStatements' = parse parseXGrantStatement "" inpXGrantStatements
+  -- case inpXGrantStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementXGrant = prettyPrinterStatements ast
+  --     putStrLn prettyStatementXGrant
+  -- putStrLn ""
 
-  let inpArgumentDeclXintP0 = "x : int {| p0 |}"
-  let inpArgumentDeclXintP0' = parse parseArgumentDecl "" inpArgumentDeclXintP0
-  case inpArgumentDeclXintP0' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyArgumentDeclXintP0 = prettyPrinterArgumentDecl ast
-      putStrLn prettyArgumentDeclXintP0
-  putStrLn ""
+  -- let inpXRevokeStatements = "foo.revoke(abc)"
+  -- let inpXRevokeStatements' = parse parseXRevokeStatement "" inpXRevokeStatements
+  -- case inpXRevokeStatements' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyStatementXRevoke = prettyPrinterStatements ast
+  --     putStrLn prettyStatementXRevoke
+  -- putStrLn ""
 
-  let inpArgumentDeclXintP0Bar = "x : int {| p0 | bar|}"
-  let inpArgumentDeclXintP0Bar' = parse parseArgumentDecl "" inpArgumentDeclXintP0Bar
-  case inpArgumentDeclXintP0Bar' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyArgumentDeclXintP0Bar = prettyPrinterArgumentDecl ast
-      putStrLn prettyArgumentDeclXintP0Bar
-  putStrLn ""
+  -- let inpArgumentDeclXintP0 = "x : int {| p0 |}"
+  -- let inpArgumentDeclXintP0' = parse parseArgumentDecl "" inpArgumentDeclXintP0
+  -- case inpArgumentDeclXintP0' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyArgumentDeclXintP0 = prettyPrinterArgumentDecl ast
+  --     putStrLn prettyArgumentDeclXintP0
+  -- putStrLn ""
 
-  let inpArgumentDeclXintP0p1Bar = "x : int {| P0, p1 | bar|}"
-  let inpArgumentDeclXintP0p1Bar' = parse parseArgumentDecl "" inpArgumentDeclXintP0p1Bar
-  case inpArgumentDeclXintP0p1Bar' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyArgumentDeclXintP0p1Bar = prettyPrinterArgumentDecl ast
-      putStrLn prettyArgumentDeclXintP0p1Bar
-  putStrLn ""
+  -- let inpArgumentDeclXintP0Bar = "x : int {| p0 | bar|}"
+  -- let inpArgumentDeclXintP0Bar' = parse parseArgumentDecl "" inpArgumentDeclXintP0Bar
+  -- case inpArgumentDeclXintP0Bar' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyArgumentDeclXintP0Bar = prettyPrinterArgumentDecl ast
+  --     putStrLn prettyArgumentDeclXintP0Bar
+  -- putStrLn ""
 
-  let inpFunctionDeclIdentity = "function identity (a : int {| P0 |} => {| P0 |}) -> int {| p0 |} {return a;}"
-  let inpFunctionDeclIdentity' = parse parseFunctionDecl "" inpFunctionDeclIdentity
-  case inpFunctionDeclIdentity' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyFunctionDeclIdentity = prettyPrinterFunctionDecl ast
-      putStrLn prettyFunctionDeclIdentity
-  putStrLn ""
+  -- let inpArgumentDeclXintP0p1Bar = "x : int {| P0, p1 | bar|}"
+  -- let inpArgumentDeclXintP0p1Bar' = parse parseArgumentDecl "" inpArgumentDeclXintP0p1Bar
+  -- case inpArgumentDeclXintP0p1Bar' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyArgumentDeclXintP0p1Bar = prettyPrinterArgumentDecl ast
+  --     putStrLn prettyArgumentDeclXintP0p1Bar
+  -- putStrLn ""
 
-  let inpFunctionDeclIdentityNested = "function nested() -> int {|p3|} {if true then {return true;x := 123;if true then {return true;x := 123;} else {return false;y := 654;};} else {return false;y := 654;};return a;}"
-  let inpFunctionDeclIdentityNested' = parse parseFunctionDecl "" inpFunctionDeclIdentityNested
-  case inpFunctionDeclIdentityNested' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyFunctionDeclIdentityNested = prettyPrinterFunctionDecl ast
-      putStrLn prettyFunctionDeclIdentityNested
-  putStrLn ""
+  -- let inpFunctionDeclIdentity = "function identity (a : int {| P0 |} => {| P0 |}) -> int {| p0 |} {return a;}"
+  -- let inpFunctionDeclIdentity' = parse parseFunctionDecl "" inpFunctionDeclIdentity
+  -- case inpFunctionDeclIdentity' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyFunctionDeclIdentity = prettyPrinterFunctionDecl ast
+  --     putStrLn prettyFunctionDeclIdentity
+  -- putStrLn ""
 
-  let inpConstructorfooA = "function foo(a : int {|p0|} => {|p1|} ){a := a;}"
-  let inpConstructorfooA' = parse (parseConstructor "foo") "" inpConstructorfooA
-  case inpConstructorfooA' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyConstructorFooA = prettyPrinterConstructorDecl ast
-      putStrLn prettyConstructorFooA
-  putStrLn ""
+  -- let inpFunctionDeclIdentityNested = "function nested() -> int {|p3|} {if true then {return true;x := 123;if true then {return true;x := 123;} else {return false;y := 654;};} else {return false;y := 654;};return a;}"
+  -- let inpFunctionDeclIdentityNested' = parse parseFunctionDecl "" inpFunctionDeclIdentityNested
+  -- case inpFunctionDeclIdentityNested' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyFunctionDeclIdentityNested = prettyPrinterFunctionDecl ast
+  --     putStrLn prettyFunctionDeclIdentityNested
+  -- putStrLn ""
 
-  let classFooBar = "class foo extends bar { int a; function foo(a : int {|p0|} => {|p1|} ){ a := a; } function aGetter() -> int {|p3|} { return a; } }"
-  let classFooBar' = parse parseClassDecl "" classFooBar
-  case classFooBar' of
-    Left err -> print err
-    Right ast -> do
-      print ast
-      let prettyClassFooBar = prettyPrinterClassDecl ast
-      putStrLn prettyClassFooBar
-  putStrLn ""
+  -- let inpConstructorfooA = "function foo(a : int {|p0|} => {|p1|} ){a := a;}"
+  -- let inpConstructorfooA' = parse (parseConstructor "foo") "" inpConstructorfooA
+  -- case inpConstructorfooA' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyConstructorFooA = prettyPrinterConstructorDecl ast
+  --     putStrLn prettyConstructorFooA
+  -- putStrLn ""
+
+  -- let classFooBar = "class foo extends bar { int a; function foo(a : int {|p0|} => {|p1|} ){ a := a; } function aGetter() -> int {|p3|} { return a; } }"
+  -- let classFooBar' = parse parseClassDecl "" classFooBar
+  -- case classFooBar' of
+  --   Left err -> print err
+  --   Right ast -> do
+  --     print ast
+  --     let prettyClassFooBar = prettyPrinterClassDecl ast
+  --     putStrLn prettyClassFooBar
+  -- putStrLn ""
 
   putStrLn ""

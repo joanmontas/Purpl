@@ -26,11 +26,11 @@ main = hspec $ do
       let ast = parse parseTerm "" input
       case ast of
         Right term -> do
-          let tc = checkTerm Map.empty Map.empty [] term
+          let tc = checkTerm initialClassTable Map.empty Map.empty [] term
           case tc of
-            Right (Type BoolGroundType AnyPurpose, _) ->
+            Right (Type BoolGroundType AnyPurpose, _, _) ->
               return ()
-            Right (Type _ p, _) ->
+            Right (Type _ p, _, _) ->
               expectationFailure ("Expected AnyPurpose, but got: " ++ show p)
             Left err ->
               expectationFailure ("Type checker failed: " ++ err)
@@ -42,11 +42,11 @@ main = hspec $ do
       let ast = parse parseTerm "" input
       case ast of
         Right term -> do
-          let tc = checkTerm Map.empty Map.empty [] term
+          let tc = checkTerm initialClassTable Map.empty Map.empty [] term
           case tc of
-            Right (Type BoolGroundType AnyPurpose, _) ->
+            Right (Type BoolGroundType AnyPurpose, _, _) ->
               return ()
-            Right (Type _ p, _) ->
+            Right (Type _ p, _, _) ->
               expectationFailure ("Expected AnyPurpose, but got: " ++ show p)
             Left err ->
               expectationFailure ("Type checker failed: " ++ err)
@@ -58,11 +58,11 @@ main = hspec $ do
       let ast = parse parseTerm "" input
       case ast of
         Right term -> do
-          let tc = checkTerm Map.empty Map.empty [] term
+          let tc = checkTerm initialClassTable Map.empty Map.empty [] term
           case tc of
-            Right (Type IntGroundType AnyPurpose, _) ->
+            Right (Type IntGroundType AnyPurpose, _, _) ->
               return ()
-            Right (Type _ p, _) ->
+            Right (Type _ p, _, _) ->
               expectationFailure ("Expected AnyPurpose, but got: " ++ show p)
             Left err ->
               expectationFailure ("Type checker failed: " ++ err)
@@ -73,7 +73,7 @@ main = hspec $ do
       let input = "let x : int {|Internal|} := 5 in {let y : int {|Internal, Private|} := x in {skip;};}"
       case parse parseLetStatements "" input of
         Right stmt -> do
-          let tc = checkStatement Map.empty Map.empty [] stmt
+          let tc = checkStatement initialClassTable Map.empty Map.empty [] stmt
           tc `shouldSatisfy` isLeft
           case tc of
             Left err -> return ()
@@ -87,10 +87,10 @@ main = hspec $ do
       case parse parseLetStatements "" input of
         Left err -> expectationFailure ("Parser failed: " ++ show err)
         Right stmt -> do
-          let tc = checkStatement Map.empty Map.empty [] stmt
+          let tc = checkStatement initialClassTable Map.empty Map.empty [] stmt
           tc `shouldSatisfy` isRight
           case tc of
-            Right gamma' -> 
+            Right (gamma', _) -> 
               gamma' `shouldBe` Map.empty
             Left err -> 
               expectationFailure $ "Should have accepted the flow from {Internal, Private} to {Internal}, but got error: " ++ err
@@ -104,12 +104,12 @@ main = hspec $ do
           expectationFailure ("Parser failed: " ++ show err)
         
         Right ast -> do
-          let result = checkStatement initialClassTable Map.empty [] ast
+          let result = checkStatement initialClassTable Map.empty Map.empty [] ast
           
           result `shouldSatisfy` isRight
           
           case result of
-            Right finalGamma -> 
+            Right (finalGamma, _) -> 
               finalGamma `shouldBe` Map.empty
             Left err -> 
               expectationFailure ("Expected success, but got Type/Security Error: " ++ err)
@@ -120,7 +120,7 @@ main = hspec $ do
       case parse parseIfStatements "" input of
         Left err -> expectationFailure ("Parser failed: " ++ show err)
         Right ast -> do
-          let result = checkStatement initialClassTable Map.empty [] ast
+          let result = checkStatement initialClassTable Map.empty Map.empty [] ast
           
           result `shouldSatisfy` isLeft
 
@@ -131,7 +131,7 @@ main = hspec $ do
       case parse parseIfStatements "" input of
         Left err -> expectationFailure ("Parser failed: " ++ show err)
         Right ast -> do
-          let result = checkStatement initialClassTable Map.empty [] ast
+          let result = checkStatement initialClassTable Map.empty Map.empty [] ast
           
           result `shouldSatisfy` isLeft
 

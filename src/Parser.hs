@@ -29,8 +29,28 @@ langDef =
       Tok.opStart = oneOf ".:|=>-",
       Tok.opLetter = oneOf ".:|=>-",
       --  Defined reserved keywords
-      Tok.reservedNames = ["new", "return", "class", "extends", "let", "in", "true", "false", "grant", "revoke", "bool", "int", "string", "skip"],
-      Tok.reservedOpNames = [".", "(", ")", ",", ";", "=", ":=", "{", "}", "{|", "|}", ":", "|", "=>", "->"],
+      Tok.reservedNames =
+        [ "new",
+          "return",
+          "class",
+          "extends",
+          "let",
+          "in",
+          "true",
+          "false",
+          "grant",
+          "revoke",
+          "setState",
+          "bool",
+          "int",
+          "string",
+          "skip",
+          "active",
+          "notYetActive",
+          "suspended",
+          "terminated"
+        ],
+      Tok.reservedOpNames = [".", "(", ")", ",", ";", "=", ":=", "{", "}", "{|", "|}", ":", "|", "=>", "->", "[", "]"],
       --  The language should be case sensitive
       Tok.caseSensitive = True
     }
@@ -115,6 +135,20 @@ parsePurposeSet = between (symbol "{|") (symbol "|}") $ do
     reservedOp "|"
     identifier
   return (PurposeSet ps r)
+
+parseState :: Parser Ast.State
+parseState =
+  (reserved "active" >> return ActiveState)
+    <|> (reserved "notYetActive" >> return NotYetActiveState)
+    <|> (reserved "suspended" >> return SuspendedState)
+    <|> (reserved "terminated" >> return TerminatedState)
+
+parsePurposeState :: Parser PurposeState
+parsePurposeState = between (symbol "[") (symbol "]") $ do
+  ps <- commaSep identifier
+  reservedOp ":"
+  s <- parseState
+  return $ PurposeState ps s
 
 -- -- -- -- Term
 
@@ -265,6 +299,7 @@ parseStatements' =
     <|> try parseTAssignmentStatements
     <|> try parseXAssignmentStatements
     <|> try parseXGrantStatement
+    <|> try parseXSetStateStatement
     <|> try parseXRevokeStatement
     <|> try parseMethodCallStatement
 
@@ -303,6 +338,16 @@ parseXRevokeStatement = do
   p <- identifier
   reservedOp ")"
   return XRevokeStatements {xStatements = x, pStatements = p}
+
+parseXSetStateStatement :: Parser Statements
+parseXSetStateStatement = do
+  x <- identifier
+  reservedOp "."
+  reservedNames "setState"
+  reservedOp "("
+  p <- parseState
+  reservedOp ")"
+  return XSetStateStatements {xSetState = x, stSetState = p}
 
 -- -- -- -- TypeVar
 
@@ -393,7 +438,9 @@ parseFunctionDecl = do
 parseMethodDecl :: Parser MethodDecl
 parseMethodDecl = do
   reserved "function"
+  startState <- optionMaybe (try parsePurposeState)
   name <- identifier
+  endState <- optionMaybe (try parsePurposeState)
   args <- parens (commaSep parseArgumentDecl)
   reservedOp "->"
   retTy <- parseType
@@ -403,7 +450,9 @@ parseMethodDecl = do
       { tMethodDecl = retTy,
         mMethodDecl = name,
         ptxpiMethodDecl = args,
-        sMethodDecl = body
+        sMethodDecl = body,
+        sPurposeState = startState,
+        fPurposeState = endState
       }
 
 -- -- -- -- ParseProgram
@@ -425,7 +474,7 @@ main = do
   -- print inp'
 
   -- let inpMethod = "function identity( i : int {|p0|}) -> int {|p0|} {return a;}"
-  let inpMethod = "function getObjectID() -> int {||} {return ObjectID}"
+  let inpMethod = "function [R1:active] getObjectID [R1:terminated] () -> int {||} {return ObjectID}"
   let inpMethod' = parse parseMethodDecl "" inpMethod
   print inpMethod'
 
