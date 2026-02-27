@@ -1,136 +1,20 @@
 module TypeChecker where
-
 import Ast
+import TypeCheckerTypes
+import StandardLibrary
+import TypeCheckerUtils
 -- import Parser (parseProgram)
 import Data.List ((\\))
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Maybe (catMaybes)
 import Data.Set qualified as Set
-import Debug.Trace (trace)
+import Debug.Trace (trace) -- NOTE(Joan) For DEBUG Remove later - Joan
 import Parser
 import PrettyPrinter
 import Text.Parsec (parse)
 
--- for now Internal, but eventually empty will valid
-internal :: String
-internal = "Internal"
-
-internalPurposeSet :: PurposeSet
-internalPurposeSet = PurposeSet ["Internal"] Nothing
-
-emptyPurposeSet :: PurposeSet
-emptyPurposeSet = PurposeSet [] Nothing
-
--- Will remove later
-defaultPurposeSet :: Type -> Type
-defaultPurposeSet (Type ground (PurposeSet [] Nothing)) = Type ground internalPurposeSet
-defaultPurposeSet other = other
-
 -- -- -- -- -- Phase 1 -- -- -- -- --
-
--- Description:
--- -- Instead of having a recursive/curried function denoting Method Type
--- -- We will flatten it for easier processing method signature
-data FlatMethodType = FlatMethodType
-  { allRhosFlattenMethodType :: [Maybe String], -- combined rho's arguments
-    argFlattenMethodType :: [ArgumentDecl], -- name type pair string + Type
-    retFlattenMethodType :: Type -- GrounType + PurposeSet
-  }
-  deriving (Show, Eq)
-
--- Map { method_name :: String -> method_ast :: MethodDecl }
-type Class_Table_Method_Present = Map.Map String MethodDecl
-
--- Map { method_name :: String -> method_type :: MethodType }
-type Class_Table_Method_Parent = Map.Map String MethodType
-
--- Map {argument_name :: String -> flat_method_type :: FlatMethodType}
-type Class_Table_Method_Flat_Parent = Map.Map String FlatMethodType
-
--- Map { class_field :: String -> field_type :: GroundType }
-type Class_Table_Field_Type = Map.Map String GroundType -- TODO(Joan) Come back later - Joan
-
--- Class name to MethodInfo
-data ClassInfo = ClassInfo
-  { extendsClassInfo :: String, -- extends class
-    fieldTypeClassInfo :: Class_Table_Field_Type, -- field-name to GroundType
-    methodPresentClassInfo :: Class_Table_Method_Present, -- method-name to ClassDecl an AST
-    methodTypeClassInfo :: Class_Table_Method_Parent, -- method-name to method-type
-    flatMethodTypeClassInfo :: Class_Table_Method_Flat_Parent, -- method-name to flatten method-type
-    constructorFlatTypeClassInfo :: FlatMethodType,
-    classPurposeSetClassInfo :: PurposeSet -- union of class constructors's argument's purposes
-  }
-  deriving (Show, Eq)
-
-type ClassTable = Map.Map String ClassInfo
-
--- Description: For now, this is our Standard Library.
--- -- All classes extends from this "Object" class.
-defaultObjectInfo :: ClassInfo
-defaultObjectInfo =
-  ClassInfo
-    { extendsClassInfo = "",
-      fieldTypeClassInfo = Map.fromList [("ObjectID", IntGroundType)],
-      methodPresentClassInfo = Map.fromList [("getObjectID", objectMethodAST)],
-      methodTypeClassInfo = Map.fromList [("getObjectID", objectMethodType)],
-      flatMethodTypeClassInfo = Map.fromList [("getObjectID", objectFlatMethodType)],
-      constructorFlatTypeClassInfo = objectConstructorFlatType,
-      classPurposeSetClassInfo = PurposeSet {purposes = [], rho = Nothing}
-    }
-  where
-    objectMethodType =
-      FMethodType
-        { fMethodType =
-            TFunctionType
-              { ty0FunctionType =
-                  Type
-                    { gtType = UnitGroundType,
-                      piType = PurposeSet {purposes = [], rho = Nothing}
-                    },
-                piFunctionType = PurposeSet {purposes = [], rho = Nothing},
-                ty1FunctionType =
-                  Type
-                    { gtType = IntGroundType,
-                      piType = PurposeSet {purposes = [], rho = Nothing}
-                    }
-              }
-        }
-
-    objectFlatMethodType =
-      FlatMethodType
-        { allRhosFlattenMethodType = [],
-          argFlattenMethodType = [],
-          retFlattenMethodType =
-            Type
-              { gtType = IntGroundType,
-                piType = PurposeSet {purposes = [], rho = Nothing}
-              }
-        }
-
-    objectMethodAST =
-      MethodDecl
-        { tMethodDecl =
-            Type
-              { gtType = IntGroundType,
-                piType = PurposeSet {purposes = [], rho = Nothing}
-              },
-          mMethodDecl = "getObjectID",
-          ptxpiMethodDecl = [],
-          sMethodDecl =
-            BlockStatements {bStatements = [ReturnStatements {tStatements = VarTerm "ObjectID"}]}
-        }
-
-    objectConstructorFlatType =
-      FlatMethodType
-        { allRhosFlattenMethodType = [],
-          argFlattenMethodType = [],
-          retFlattenMethodType = Type (ClassGroundType "Object") AnyPurpose
-        }
-
--- Description: Creates a ClassTable containing the 'Top' Object Class.
-initialClassTable :: ClassTable
-initialClassTable = Map.singleton "Object" defaultObjectInfo
 
 -- Description: Creates ClassTable given a program. Moreover, the ClassInfo inherits from its base class.
 classTableConstructor :: Program -> ClassTable
@@ -268,105 +152,8 @@ classTableConstructor (Program classes) = classTableConstructor' classes (initia
               }
        in class_Table_Method_Flat_Parent_constructor ms (Map.insert (mMethodDecl m) flatMT cTMFP)
 
--- -- -- -- -- Helpers Made Global -- -- -- -- --
-
-extract_rho_from_PurposeSet (PurposeSet _ (Just rho)) = rho
-extract_rho_from_PurposeSet _ = []
-
-extract_rhos_from_ArgumentDecls [] rhos = rhos
-extract_rhos_from_ArgumentDecls (arg : args) rhos =
-  let rhoT = extract_rho_from_PurposeSet (piType (tArgumentDecl arg))
-      rhoA = extract_rho_from_PurposeSet (piArgumentDecl arg)
-      currentFound = []
-      rhoT' = if not (null rhoT) then rhoT : currentFound else currentFound
-      rhoA' = if not (null rhoA) then rhoA : rhoT' else rhoT'
-
-      newRhos = rhos ++ rhoA'
-   in extract_rhos_from_ArgumentDecls args newRhos
-
-extract_purposes_from_ArgumentDecls [] purp = purp
-extract_purposes_from_ArgumentDecls (arg : args) purp =
-  let t = purposes (piType (tArgumentDecl arg))
-      pFromArg = purposes (piArgumentDecl arg)
-      pi = purp ++ t ++ pFromArg -- side effect
-   in extract_purposes_from_ArgumentDecls args pi
-
-getRho :: PurposeSet -> Maybe String
-getRho AnyPurpose = Nothing
-getRho (PurposeSet _ r) = r
 
 -- -- -- -- -- Phase 2   -- -- -- -- --
---  TODO change this, there should it be a single intance, but rather/possibly multiple
-type PMatches = Map.Map String [PurposeSet]
-
-type Gamma = Map.Map String Type
-
-type PEnv = Map.Map String State
-
--- Description: List of rho variable in the environment
--- -- When we are 'checking' ad we encounter rho0,
--- -- then rho0 must be in the Delta/scope
-type Delta = [Maybe String]
-
--- Description: Go up the tree until the base class is found or not.
-isChildClass :: ClassTable -> String -> String -> Bool
-isChildClass ct child base =
-  if (child == base)
-    then True
-    else case (Map.lookup child ct) of
-      Nothing -> False
-      Just info -> isChildClass ct (extendsClassInfo info) base
-
--- Description: T0 <: T1
-isSubType :: ClassTable -> GroundType -> GroundType -> Bool
-isSubType ct BoolGroundType BoolGroundType = True
-isSubType ct IntGroundType IntGroundType = True
-isSubType ct StringGroundType StringGroundType = True
-isSubType ct UnitGroundType UnitGroundType = True -- NOTE() Added
-isSubType ct (ClassGroundType n0) (ClassGroundType n1) =
-  isChildClass ct n0 n1
-isSubType ct _ _ = False
-
--- Description: P0 ⊆ P1
--- -- The rho is accounted for. TODO(Joan) Come back to this - Joan
-isSubPurpose :: PurposeSet -> PurposeSet -> Bool
-isSubPurpose AnyPurpose _ = True
-isSubPurpose _ AnyPurpose = True
-isSubPurpose (PurposeSet pSource r0) (PurposeSet pTarget r1) =
-  (all (`elem` pSource) pTarget)
-    && ( case (r0, r1) of
-           (Nothing, _) -> True -- P0 contains less rho purpose
-           (Just r0', Just r1') -> r0' == r1' -- They contain the same rho
-           (_, _) -> False -- P0 contains more rho purpose
-       )
-
--- | Description: Γ′′ = Γ′_1 ⊓ Γ′_2
--- | Merges two Gammas using ⊓-Type.
-intersectionGamma :: Gamma -> Gamma -> Either String Gamma
-intersectionGamma gamma_1' gamma_2' = do
-  let gammaIntersect = Map.toList (Map.intersectionWith (,) gamma_1' gamma_2')
-  let conflicts = findTypeConflicts gammaIntersect
-
-  if not (null conflicts)
-    then Left ("Error: intersectionGamma found Type Conflicts in: " ++ show conflicts)
-    else
-      Right (Map.fromList [(k, meetType v0 v1) | (k, (v0, v1)) <- gammaIntersect])
-  where
-    findTypeConflicts [] = []
-    findTypeConflicts ((k, (v0, v1)) : ks)
-      | gtType v0 /= gtType v1 = k : findTypeConflicts ks
-      | otherwise = findTypeConflicts ks
-
-    meetType (Type gt1 pi1) (Type gt2 pi2) =
-      -- ⊓-Type
-      Type
-        { gtType = gt1, -- TODO(Joan) Super Type - Joan
-          piType =
-            PurposeSet
-              { purposes = Set.toList (Set.fromList ((purposes pi1) ++ (purposes pi2))),
-                rho = (rho pi1) -- TODO(Joan) Something to think about - Joan
-              }
-        }
 
 checkConstructorArgs :: ClassTable -> Gamma -> PEnv -> Delta -> [ArgumentDecl] -> [Term] -> Either String (Gamma, PEnv)
 checkConstructorArgs _ gamma pEnv _ [] [] = Right (gamma, pEnv)
@@ -399,9 +186,6 @@ checkConstructorArgs ct gamma pEnv delta (argDecl : args) (tTerm : ts) = do
           ++ " but got "
           ++ show gt_actual
 checkConstructorArgs _ _ _ _ _ _ = Left "ERROR: checkConstructorArgs Constructor Argument Count Mismatch"
-
--- type CheckResult a = Either String (a, Gamma)
-type CheckResult a = Either String (a, Gamma, PEnv)
 
 -- Description: Given a term returns its Type given Gamma
 checkTerm :: ClassTable -> Gamma -> PEnv -> Delta -> Term -> CheckResult Type
@@ -568,27 +352,6 @@ checkTerm ct gamma pEnv delta (MethodCallTerm s m arg) = do
                   ++ " but expected "
                   ++ show expected
 
-    -- -- Description: Matches a Rho to a PurposeSet. Used during Method-Invocation
-    -- -- -- pmatch({p1 · · · pk     }, {pm · · ·              pn     }) = ∅
-    -- -- -- pmatch({p1 · · · pk|ρ   }, {p1 · · · pk, pm · · · pn     }) = {ρ  → {pm · · · pn     }}
-    -- -- -- pmatch({p1 · · · pk|  ρ1}, {p1 · · · pk, pm · · · pn | ρ2}) = {ρ1 → {pm · · · pn | ρ2}}
-    pMatch sigma p1 p2 =
-      case (rho p1, rho p2) of
-        (Nothing, Nothing) -> Right sigma
-        (Just r1, Nothing) ->
-          let diff = Set.toList (Set.difference (Set.fromList (purposes p2)) (Set.fromList (purposes p1)))
-           in Right (Map.insertWith (++) r1 [PurposeSet diff Nothing] sigma)
-        (Just r1, Just r2) ->
-          let diff = Set.toList (Set.difference (Set.fromList (purposes p2)) (Set.fromList (purposes p1)))
-           in Right (Map.insertWith (++) r1 [PurposeSet diff (Just r2)] sigma)
-        (_, _) -> Right sigma
-
-    -- Description: Implements the is-fn(σ) check. Determine if arguments contains
-    -- rhos that points to two or more PurposeSet.
-    -- TODO() Come back to this
-    is_fn sigma = any hasConflict (Map.elems sigma) -- is-fn(σ)
-    hasConflict [] = False
-    hasConflict (x : xs) = not (all (== x) xs)
 -- Inference:
 -- -- Γ ⊢ t : C_tπ_t ▷ Γ'
 -- -- CT(Ct, f) = G
@@ -615,11 +378,6 @@ checkTerm ct gamma pEnv delta (FieldAccessTerm s f) = do
           ++ f
           ++ "' on a non-object type: "
           ++ show (gtType t_t)
-checkTerm _ gamma pEnv _ other =
-  Left ("ERROR: checkTerm: Term not yet implemented" ++ show other)
-
--- type CheckStatementResult = Either String Gamma
-type CheckStatementResult = Either String (Gamma, PEnv)
 
 -- Description: Given a Statement make sure there are no Misuse of Purposes
 -- Mistypes and return the updated Gamma.
@@ -920,9 +678,6 @@ checkStatement ct gamma pEnv delta (TAssignmentStatements target expr) = do
 checkStatement ct gamma pEnv delta (MethodCallStatements t) = do
   (t_t, gamma', pEnv') <- checkTerm ct gamma pEnv delta t
   return (gamma', pEnv')
-checkStatement ct gamma pEnv delta something = Left ("Error: CheckStatement not yet implemented" ++ (show something))
-
-type CheckMethodDeclResult = Either String ()
 
 -- ∅ ⊢ T
 -- ∆ ⊢ ť

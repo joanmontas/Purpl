@@ -6,6 +6,8 @@ import Data.Map qualified as Map
 import Parser hiding (main)
 import Test.Hspec
 import Text.Parsec
+import StandardLibrary hiding (main)
+import TypeCheckerTypes hiding (main)
 import TypeChecker hiding (main)
 
 -- -- https://hackage.haskell.org/package/hspec-expectations-0.8.4/docs/Test-Hspec-Expectations.html
